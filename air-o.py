@@ -31,7 +31,11 @@ async def sync(ctx):
     except Exception as e:
         print("Sync failed:", e)
     finally:
-        await ctx.message.delete()
+        try:
+            if ctx.message:
+                await ctx.message.delete()
+        except discord.NotFound:
+            pass
 
 
 @bot.tree.error
@@ -45,12 +49,12 @@ async def on_app_command_error(
         )
     elif isinstance(error, app_commands.CommandInvokeError):
         await interaction.response.send_message(
-            f"You're either trying to run this on yourself, or me. And I don't like the idea of either! {error}",
+            f"Command error: {error}",
             ephemeral=True,
         )
     elif isinstance(error, app_commands.CheckFailure):
         await interaction.response.send_message(
-            "Sorry, but only the maintainer of this application is allowed to use this...",
+            "Sorry, but only the maintainer and owner of this application is allowed to use this...",
             ephemeral=True,
         )
     else:
