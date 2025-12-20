@@ -190,10 +190,9 @@ class TaskManagement(commands.Cog):
         - Saves check-in button to a new view for persistence between reboots
         """
         await interaction.response.defer(ephemeral=True)
-
         if not await self.interaction_is_captain(interaction):
             await interaction.followup.send(
-                "Only team captains can assign tasks.",
+                "Only team captains can set a checkin channel tasks.",
                 ephemeral=True,
             )
             return
@@ -311,7 +310,7 @@ class TaskManagement(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         if not await self.interaction_is_captain(interaction):
             await interaction.followup.send(
-                "Only team captains can complete tasks.",
+                "Only team captains can set a checkin channel tasks.",
                 ephemeral=True,
             )
             return
@@ -431,6 +430,11 @@ class TaskManagement(commands.Cog):
                     ephemeral=True,
                 )
             else:
+                if archived:
+                    await interaction.followup.send(
+                        "There are no archived tasks in this guild.", ephemeral=True
+                    )
+                    return
                 await interaction.followup.send(
                     "There are no open tasks in this guild.", ephemeral=True
                 )
@@ -500,7 +504,7 @@ class TaskManagement(commands.Cog):
     )
     @app_commands.describe(
         task_names="Semi-colon seperated list of archived task names to delete (e.g., task1; task2).",
-        delete_all="Delete all archived tasks. Defaults to false if task_names is provided.",
+        delete_all="Delete all archived tasks.",
     )
     async def delete_archived_tasks(
         self,
@@ -512,13 +516,19 @@ class TaskManagement(commands.Cog):
         Deletes specific or all threads associated with archived tasks in the archived_tasks table.
         """
         await interaction.response.defer(ephemeral=True)
+        if not await self.interaction_is_captain(interaction):
+            await interaction.followup.send(
+                "Only team captains can set a checkin channel tasks.",
+                ephemeral=True,
+            )
+            return
 
         conn = sqlite3.connect(DB_PATH)
 
         try:
             if not task_names and not delete_all:
                 await interaction.followup.send(
-                    "Please provide a semi-colon seperated list of task names to delete.",
+                    "Please provide a semi-colon seperated list of task names to delete, or specify delete_all.",
                     ephemeral=True,
                 )
                 return

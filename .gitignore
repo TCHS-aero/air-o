@@ -1,7 +1,7 @@
 # Pre-configured virtual environments
 air-o
 
-# Sensitive environment files
+# Sensitive files
 *.env
 *.db
 

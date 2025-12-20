@@ -110,7 +110,7 @@ def create_task(
             "No check-in channel configured. Please set one before creating tasks."
         )
 
-    next_check_time = datetime.utcnow() + timedelta(seconds=due_interval_hours)
+    next_check_time = datetime.utcnow() + timedelta(hours=due_interval_hours)
 
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
