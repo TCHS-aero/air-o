@@ -24,42 +24,87 @@ CAPTAIN_ROLE_NAME = "Team Captain"
 
 
 class TaskManagement(commands.Cog):
+    """
+    Discord Cog responsible for task assignment, tracking, reminders,
+    and check-in management for a guild.
+
+    This cog:
+    - Manages task lifecycle (create, update, list, archive, delete)
+    - Enforces Team Captain permissions
+    - Persists interactive views across bot restarts
+    - Periodically reminds users to check in on assigned tasks
+    """
+
     def __init__(self, bot: commands.Bot):
+        """
+        Initialize the TaskManagement cog.
+
+        - Initializes the database schema
+        - Reloads persistent UI views for active tasks
+        - Starts the background reminder loop
+
+        Args:
+            bot (commands.Bot): The active Discord bot instance.
+        """
         self.bot = bot
         init_db()
+        self.reload_persistent_views()
+        self.checkin_loop.start()
 
+    def reload_persistent_views(self):
+        """
+        Reload persistent Check-in views from the database.
+
+        Reads all active tasks from the database and re-registers their
+        associated persistent `CheckinView` instances with the bot.
+        This ensures buttons remain functional after bot restarts.
+        """
         try:
             conn = sqlite3.connect(DB_PATH)
             cur = conn.cursor()
-            cur.execute("SELECT id FROM tasks WHERE active = 1")
+            cur.execute("SELECT id, name FROM tasks WHERE active = 1")
             rows = cur.fetchall()
-            for (task_id,) in rows:
-                try:
-                    self.bot.add_view(CheckinView(task_id=task_id))
-                except Exception:
-                    pass
-        except Exception:
-            pass
+            for task_id, name in rows:
+                self.bot.add_view(CheckinView(task_id=task_id, name=name))
+        except Exception as e:
+            print(f"Error reloading persistent views: {e}")
         finally:
             try:
                 conn.close()
             except Exception:
                 pass
 
-        self.checkin_loop.start()
-
     def cog_unload(self):
+        """
+        Called automatically when the cog is unloaded.
+
+        Stops the background check-in reminder loop.
+        """
         self.checkin_loop.cancel()
 
     def within_waking_hours(self):
         """
-        Checks to see if the current time is within waking hours.
+        Determine whether the current local time is within waking hours.
 
-        - Waking hours are between 9:00AM and 9:00PM (21:00)
+        Waking hours are defined as:
+        - 09:00 AM to 09:00 PM (inclusive)
+
+        Returns:
+            bool: True if current time is within waking hours, otherwise False.
         """
         return time(9, 0, 0) <= datetime.now().time() <= time(21, 0, 0)
 
     def get_query(self, archived, placeholder: Optional[str]):
+        """
+        Construct a SQL query for fetching tasks.
+
+        Args:
+            archived (bool): Whether to query archived tasks instead of active ones.
+            placeholder (Optional[str]): SQL placeholder string for filtering by captain IDs.
+
+        Returns:
+            str: A parameterized SQL query string.
+        """
         if archived and placeholder:
             return f"""
                     SELECT id, name, thread_id, captain_id, due_interval_hours
@@ -92,9 +137,13 @@ class TaskManagement(commands.Cog):
 
     async def interaction_is_captain(self, interaction: discord.Interaction) -> bool:
         """
-        Checks to see if the current time is within waking hours.
+        Check whether the interacting user has the Team Captain role.
 
-        - Waking hours are between 9:00AM and 9:00PM (21:00)
+        Args:
+            interaction (discord.Interaction): The interaction being evaluated.
+
+        Returns:
+            bool: True if the user is a guild member with the Team Captain role.
         """
         if not interaction.user or not isinstance(interaction.user, discord.Member):
             return False
@@ -111,18 +160,21 @@ class TaskManagement(commands.Cog):
         self, interaction: discord.Interaction, channel_id: str
     ):
         """
-        Sets the channel for user check-ins to be routed to.
+        Configure the guild-wide check-in forwarding channel.
 
-        Behavior:
-        - Checks to see if user is a Team Captain
-        - Converts channel reference to id if need be
-        - uses get_checkin_channel() to verify if a channel already is set
-        - if not the same channel as is already set, then changes the channel id to match
+        This command:
+        - Requires Team Captain permissions
+        - Accepts a channel mention or numeric channel ID
+        - Updates the stored channel if it differs from the current one
+
+        Args:
+            interaction (discord.Interaction): The command interaction.
+            channel_id (str): Channel ID or channel mention string.
         """
         await interaction.response.defer(ephemeral=True)
         if not await self.interaction_is_captain(interaction):
             await interaction.followup.send(
-                "Only team captains can set a checkin channel tasks.",
+                "Only team captains can set a checkin channel tasks, sorry! Bug a captain to do their thing.",
                 ephemeral=True,
             )
             return
@@ -135,7 +187,7 @@ class TaskManagement(commands.Cog):
                 channel_id = int(no_whitespace)
         except Exception as e:
             await interaction.followup.send(
-                f"Please use a valid channel id...\n{e}",
+                f"Please use a valid channel id, or reference one using `#channel`\n{e}",
                 ephemeral=True,
             )
             return
@@ -167,6 +219,114 @@ class TaskManagement(commands.Cog):
         )
 
     @app_commands.command(
+        name="update_assignees",
+        description="Updates the assignees within a given task.",
+    )
+    @app_commands.describe(
+        name="Name of the task",
+        assignees="Users to assign to this task",
+    )
+    async def update_assignees(
+        self,
+        interaction: discord.Interaction,
+        name: str,
+        assignees: str,
+    ):
+        """
+        Update the assignees for an existing task.
+
+        This updates both:
+        - The database task assignment
+        - The embedded message in the task thread
+
+        Args:
+            interaction (discord.Interaction): The command interaction.
+            name (str): Name of the task to update.
+            assignees (str): Mentioned users or IDs to assign.
+        """
+        await interaction.response.defer(ephemeral=True)
+        if not await self.interaction_is_captain(interaction):
+            await interaction.followup.send(
+                "Only team captains can can change assignees in tasks, you should totally bug one to do it for you 👀",
+                ephemeral=True,
+            )
+            return
+
+        ids = set(int(x) for x in re.findall(r"\d{15,20}", assignees))
+        guild = interaction.guild
+        assignee_members = []
+
+        if guild:
+            for member_id in ids:
+                member = guild.get_member(member_id)
+                if not member:
+                    try:
+                        member = await guild.fetch_member(member_id)
+                    except discord.HTTPException:
+                        continue
+                assignee_members.append(member)
+
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT thread_id, due_interval_hours, id FROM tasks WHERE name = ? AND guild_id = ? LIMIT 1
+                """,
+                (name, guild.id),
+            )
+            task = cur.fetchone()
+        finally:
+            conn.close()
+
+        if not task:
+            await interaction.followup.send(
+                f"No task with the name `{name}` exists in this server.",
+                ephemeral=True,
+            )
+            return
+        thread_id, due_interval, task_id = task
+
+        try:
+            thread = await self.bot.fetch_channel(thread_id)
+        except discord.NotFound:
+            await interaction.followup.send(
+                f"Task thread for `{name}` was not found.",
+                ephemeral=True,
+            )
+            return
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "I don't have permission to access this thread... please grant me administrator permissions!",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            async for message in thread.history(limit=1, oldest_first=True):
+                if message.author == self.bot.user and message.embeds:
+                    embed = message.embeds[0]
+
+                    embed.set_field_at(
+                        index=0,
+                        name="Assignees",
+                        value=", ".join(m.mention for m in assignee_members),
+                        inline=False,
+                    )
+                    await message.edit(embed=embed)
+
+                    await interaction.followup.send(
+                        f"Task `{name}` assignees updated successfully in {thread.mention}! Now they can work properly :D",
+                        ephemeral=True,
+                    )
+                    return
+
+        except discord.HTTPException as e:
+            await interaction.followup.send(
+                f"Failed to update assignees: {e}", ephemeral=True
+            )
+
+    @app_commands.command(
         name="assign_task", description="Create a task thread and assign users."
     )
     @app_commands.describe(
@@ -182,17 +342,24 @@ class TaskManagement(commands.Cog):
         reminder_duration: Optional[int] = 26,
     ):
         """
-        Creates a new assignment for a set of given users.
+        Create a new task and assign users to it.
 
-        Behavior:
-        - Creates a new thread with a welcome message in the channel that the command was called in
-        - Pings all assignees and pins check-in message
-        - Saves check-in button to a new view for persistence between reboots
+        This command:
+        - Creates a public thread
+        - Registers a persistent check-in button
+        - Stores task metadata in the database
+        - Pins the task overview message
+
+        Args:
+            interaction (discord.Interaction): The command interaction.
+            name (str): Unique task name.
+            assignees (str): Mentioned users or IDs to assign.
+            reminder_duration (Optional[int]): Hours between check-in reminders.
         """
         await interaction.response.defer(ephemeral=True)
         if not await self.interaction_is_captain(interaction):
             await interaction.followup.send(
-                "Only team captains can set a checkin channel tasks.",
+                "Only team captains can assign tasks, go and bug someone do to it for you 🥺",
                 ephemeral=True,
             )
             return
@@ -227,13 +394,14 @@ class TaskManagement(commands.Cog):
             interaction.channel, discord.TextChannel
         ):
             await interaction.followup.send(
-                "This command must be used in a text channel.", ephemeral=True
+                "This command must be used in a text channel or a poll channel.",
+                ephemeral=True,
             )
             return
 
         if interaction.guild_id and get_task_id_by_name(interaction.guild_id, name):
             await interaction.followup.send(
-                f"A task named `{name}` already exists. Please choose a unique name.",
+                f"A task named `{name}` already exists. Please choose a unique name so I don't get confused...",
                 ephemeral=True,
             )
             return
@@ -254,7 +422,7 @@ class TaskManagement(commands.Cog):
         if task_id is None:
             await thread.delete()
             await interaction.followup.send(
-                f"Task `{name}` could not be created due to duplicate names. Use a different name.",
+                f"Pretty sure that that the task `{name}` already exists... please name it something different!",
                 ephemeral=True,
             )
             return
@@ -283,34 +451,41 @@ class TaskManagement(commands.Cog):
 
         self.bot.add_view(view)
         await interaction.followup.send(
-            f"Task `{name}` created and assigned in {thread.mention}.", ephemeral=True
+            f"Task `{name}` created and assigned in {thread.mention}! Woo!",
+            ephemeral=True,
         )
 
     @app_commands.command(
-        name="cleanup_task", description="Mark a task complete and archive its thread."
+        name="cleanup_tasks",
+        description="Mark one or more tasks complete and archive their threads.",
     )
     @app_commands.describe(
-        task_name="Name of the task to complete and clean up.",
-        delete_thread="Whether to delete the task thread. (disabled by default)",
+        task_names="Semicolon-separated list of task names to complete and clean up. (e.g. task1; task2; task3; task4) or (e.g. task)",
+        delete_thread="Whether to delete the task threads. (disabled by default)",
     )
     async def cleanup_task(
         self,
         interaction: discord.Interaction,
-        task_name: str,
+        task_names: str,
         delete_thread: Optional[bool] = False,
     ):
         """
-        Closes an active task.
+        Complete and archive one or more active tasks.
 
-        Behavior:
-        - Locks and archives the thread associated with a task
-        - Removes relevant information from the database
+        This command:
+        - Marks each task complete in the database
+        - Archives and locks each task thread, or deletes it
+
+        Args:
+            interaction (discord.Interaction): The command interaction.
+            task_names (str): Semicolon-separated list of task names to clean up.
+            delete_thread (Optional[bool]): Whether to delete the threads entirely.
         """
 
         await interaction.response.defer(ephemeral=True)
         if not await self.interaction_is_captain(interaction):
             await interaction.followup.send(
-                "Only team captains can set a checkin channel tasks.",
+                "Only team captains can cleanup tasks. Go ping the captains!",
                 ephemeral=True,
             )
             return
@@ -322,45 +497,62 @@ class TaskManagement(commands.Cog):
             )
             return
 
-        task_id = get_task_id_by_name(interaction.guild_id, task_name)
-        if task_id is None:
-            await interaction.followup.send(
-                f'The task "{task_name}" doesn\'t exist here... are you sure you spelled it right?',
-                ephemeral=True,
+        task_list = task_names.split("; ")
+        failed_tasks = []
+        completed_tasks = []
+
+        for task_name in task_list:
+            task_name = task_name.strip()
+            if not task_name:
+                continue
+
+            task_id = get_task_id_by_name(interaction.guild_id, task_name)
+            if task_id is None:
+                failed_tasks.append(
+                    f'Task "{task_name}" doesn\'t exist, you sure you spelled it right?'
+                )
+                continue
+
+            task = get_task_by_id(task_id)
+            thread_id = task["thread_id"] if task else None
+
+            deleted = complete_task(interaction.guild_id, task_name, delete_thread)
+            if not deleted:
+                failed_tasks.append(
+                    f'Failed to remove task "{task_name}", dw things will still work.'
+                )
+                continue
+
+            if not delete_thread and thread_id:
+                thread_channel: Optional[discord.Thread] = None
+                thread_channel = self.bot.get_channel(thread_id)
+                if thread_channel is None:
+                    try:
+                        thread_channel = await self.bot.fetch_channel(thread_id)
+                    except Exception:
+                        thread_channel = None
+
+                if thread_channel is not None:
+                    try:
+                        await thread_channel.edit(archived=True, locked=True)
+                    except Exception:
+                        pass
+            elif thread_id:
+                thread_channel = self.bot.get_channel(thread_id)
+                await thread_channel.delete()
+
+            completed_tasks.append(
+                f'Task "{task_name}" marked complete! Assignees will no longer be prompted for check-ins. Woot Woot!'
             )
-            return
 
-        task = get_task_by_id(task_id)
-        thread_id = task["thread_id"] if task else None
-
-        deleted = complete_task(interaction.guild_id, task_name, delete_thread)
-        if not deleted:
-            await interaction.followup.send(
-                f'Failed to remove task "{task_name}".',
-                ephemeral=True,
-            )
-            return
-
-        if not delete_thread and thread_id:
-            thread_channel: Optional[discord.Thread] = None
-            thread_channel = self.bot.get_channel(thread_id)
-            if thread_channel is None:
-                try:
-                    thread_channel = await self.bot.fetch_channel(thread_id)
-                except Exception:
-                    thread_channel = None
-
-            if thread_channel is not None:
-                try:
-                    await thread_channel.edit(archived=True, locked=True)
-                except Exception:
-                    pass
-        else:
-            thread_channel = self.bot.get_channel(thread_id)
-            await thread_channel.delete()
+        summary = []
+        if completed_tasks:
+            summary.append("\n".join(completed_tasks))
+        if failed_tasks:
+            summary.append("\n".join(failed_tasks))
 
         await interaction.followup.send(
-            f'Task "{task_name}" marked complete. Assignees will no longer be prompted for check-ins.',
+            "\n\n".join(summary),
             ephemeral=True,
         )
 
@@ -378,11 +570,21 @@ class TaskManagement(commands.Cog):
         filter: Optional[str],
         archived: Optional[bool] = False,
     ):
+        """
+        List active or archived tasks in the guild.
+
+        Supports optional filtering by captain ID(s).
+
+        Args:
+            interaction (discord.Interaction): The command interaction.
+            filter (Optional[str]): Mentioned user IDs to filter by captain.
+            archived (Optional[bool]): Whether to list archived tasks.
+        """
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id
         if guild_id is None:
             await interaction.followup.send(
-                "This command must be run in a server (guild) channel, not in DMs.",
+                "This command must be run in a server (guild) channel, not in DMs. I mean, threads don't exist there, do they?",
                 ephemeral=True,
             )
             return
@@ -426,7 +628,7 @@ class TaskManagement(commands.Cog):
         if not rows:
             if filter:
                 await interaction.followup.send(
-                    "There are no open tasks in this guild created by this user(s).",
+                    "There are no open tasks in this guild created by this user(s). What a shame... they should set some up.",
                     ephemeral=True,
                 )
             else:
@@ -436,7 +638,8 @@ class TaskManagement(commands.Cog):
                     )
                     return
                 await interaction.followup.send(
-                    "There are no open tasks in this guild.", ephemeral=True
+                    "There are no open tasks in this guild. Woo!!! No work!!",
+                    ephemeral=True,
                 )
             return
 
@@ -446,7 +649,7 @@ class TaskManagement(commands.Cog):
 
         embed = discord.Embed(
             title="Open Tasks",
-            description=f"Currently {len(rows)} {desc} task(s) in this server.",
+            description=f"There are currently {len(rows)} {desc} task(s) in this server.",
             color=discord.Color.blurple(),
         )
 
@@ -482,7 +685,9 @@ class TaskManagement(commands.Cog):
                     pass
 
             assignees_text = (
-                ", ".join(assignees_list) if assignees_list else "No assignees"
+                ", ".join(assignees_list)
+                if assignees_list
+                else "Nobody... Where is everyone? 😭"
             )
             captain_mention = f"<@{captain_id}>"
 
@@ -513,12 +718,17 @@ class TaskManagement(commands.Cog):
         delete_all: Optional[bool] = False,
     ):
         """
-        Deletes specific or all threads associated with archived tasks in the archived_tasks table.
+        Permanently delete archived tasks and their threads.
+
+        Args:
+            interaction (discord.Interaction): The command interaction.
+            task_names (Optional[str]): Semi-colon separated list of task names.
+            delete_all (Optional[bool]): Whether to delete all archived tasks.
         """
         await interaction.response.defer(ephemeral=True)
         if not await self.interaction_is_captain(interaction):
             await interaction.followup.send(
-                "Only team captains can set a checkin channel tasks.",
+                "Only team captains can delete tasks! Don't go ruining people's productvity now, or else I'll report you! ...or I would if I could",
                 ephemeral=True,
             )
             return
@@ -528,7 +738,7 @@ class TaskManagement(commands.Cog):
         try:
             if not task_names and not delete_all:
                 await interaction.followup.send(
-                    "Please provide a semi-colon seperated list of task names to delete, or specify delete_all.",
+                    "Please provide a semi-colon seperated list of task names to delete, or specify delete_all. Otherwise, uh... I can't read.",
                     ephemeral=True,
                 )
                 return
@@ -553,7 +763,7 @@ class TaskManagement(commands.Cog):
 
             if not archived_tasks:
                 await interaction.followup.send(
-                    "No matching archived tasks found to delete.",
+                    "No matching archived tasks found to delete... so that probably means you spelled it wrong.",
                     ephemeral=True,
                 )
                 return
@@ -583,7 +793,7 @@ class TaskManagement(commands.Cog):
             conn.commit()
 
             await interaction.followup.send(
-                f"Deleted {deleted_threads} thread(s) and removed {len(archived_tasks)} task(s) from the archive.",
+                f"""Deleted {deleted_threads} thread(s) and removed {len(archived_tasks)} task(s) from the archive! This cannot be undone, so I hope you know what you were doing.""",
                 ephemeral=True,
             )
 
@@ -601,7 +811,12 @@ class TaskManagement(commands.Cog):
     @tasks.loop(minutes=20)
     async def checkin_loop(self):
         """
-        Task loop to check which threads need reminders and send notifications.
+        Periodic background task that sends check-in reminders.
+
+        - Runs every 20 minutes
+        - Skips execution outside waking hours
+        - Sends reminder messages to overdue task threads
+        - Updates the next scheduled reminder time
         """
         if not self.within_waking_hours():
             print("Skipping check-in loop: Outside waking hours.")
@@ -639,11 +854,26 @@ class TaskManagement(commands.Cog):
 
     @checkin_loop.before_loop
     async def before_checkin_loop(self):
+        """
+        Await bot readiness before starting the check-in loop.
+        """
         await self.bot.wait_until_ready()
 
 
 class CheckinSelect(discord.ui.Select):
+    """
+    Dropdown UI component allowing users to submit a daily task check-in.
+    """
+
     def __init__(self, task_id: int, name: str):
+        """
+        Initialize the check-in dropdown.
+
+        Args:
+            task_id (int): Database ID of the task.
+            name (str): Human-readable task name.
+        """
+
         options = [
             discord.SelectOption(
                 label="Done!",
@@ -677,6 +907,16 @@ class CheckinSelect(discord.ui.Select):
         self.name = name
 
     async def callback(self, interaction: discord.Interaction):
+        """
+        Handle user selection from the check-in dropdown.
+
+        - Records the check-in in the database
+        - Sends a summary embed to the configured check-in channel
+        - Acknowledges the user privately
+
+        Args:
+            interaction (discord.Interaction): The interaction context.
+        """
         await interaction.response.defer(ephemeral=True)
         choice_val = self.values[0]
 
@@ -707,13 +947,15 @@ class CheckinSelect(discord.ui.Select):
                 pass
 
         task = get_task_by_id(self.task_id)
+        thread = f"<#{task.get('thread_id')}>"
         if task:
             embed = discord.Embed(
                 title=f"New report on Task: {self.name}!",
-                description=f" Check-in from {interaction.user.mention}",
+                description=f"Check-in from {interaction.user.mention}",
                 color=discord.Color.blue(),
             )
             embed.add_field(name="Report:", value=choice_text, inline=False)
+            embed.add_field(name="Thread:", value=thread, inline=False)
             embed.set_footer(text=ctime())
             guild_channel_id = get_checkin_channel(interaction.guild_id)
 
@@ -740,14 +982,39 @@ class CheckinSelect(discord.ui.Select):
 
 
 class CheckinChoiceView(discord.ui.View):
+    """
+    Temporary view containing the check-in dropdown menu.
+    """
+
     def __init__(self, name, task_id: int, timeout: Optional[float] = 60.0):
+        """
+        Initialize the check-in choice view.
+
+        Args:
+            name (str): Task name.
+            task_id (int): Task database ID.
+            timeout (Optional[float]): View timeout in seconds.
+        """
+
         super().__init__(timeout=timeout)
         self.name = name
         self.add_item(CheckinSelect(task_id=task_id, name=self.name))
 
 
 class CheckinView(discord.ui.View):
+    """
+    Persistent view containing the main 'Check-in' button for a task.
+    """
+
     def __init__(self, name, task_id: int):
+        """
+        Initialize the persistent check-in button view.
+
+        Args:
+            name (str): Task name.
+            task_id (int): Task database ID.
+        """
+
         super().__init__(timeout=None)
         self.task_id = task_id
         self.name = name
@@ -771,4 +1038,10 @@ class CheckinView(discord.ui.View):
 
 
 async def setup(bot: commands.Bot):
+    """
+    Load the TaskManagement cog.
+
+    Args:
+        bot (commands.Bot): The Discord bot instance.
+    """
     await bot.add_cog(TaskManagement(bot))
