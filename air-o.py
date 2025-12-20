@@ -128,7 +128,11 @@ async def reload(ctx):
     except Exception as e:
         print("Failed to reload cogs:", e)
     finally:
-        await ctx.message.delete()
+        try:
+            if ctx.message:
+                await ctx.message.delete()
+        except discord.NotFound:
+            pass
 
 
 async def main():

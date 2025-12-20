@@ -3,6 +3,7 @@ air-o
 
 # Sensitive environment files
 *.env
+*.db
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

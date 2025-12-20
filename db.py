@@ -29,7 +29,7 @@ def init_db() -> None:
             thread_id INTEGER NOT NULL,
             name TEXT NOT NULL,
             captain_id INTEGER NOT NULL,
-            due_interval_hours INTEGER NOT NULL DEFAULT 16,
+            due_interval_hours INTEGER NOT NULL DEFAULT 26,
             next_check_time TIMESTAMP,
             active INTEGER NOT NULL DEFAULT 1,
             UNIQUE (guild_id, name)
@@ -66,6 +66,21 @@ def init_db() -> None:
         CREATE TABLE IF NOT EXISTS checkin_channel (
             guild_id INTEGER NOT NULL UNIQUE,
             channel_id INTEGER NOT NULL
+        )
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS archived_tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            original_task_id INTEGER NOT NULL,
+            guild_id INTEGER NOT NULL,
+            thread_id INTEGER NOT NULL,
+            due_interval_hours INTEGER NOT NULL DEFAULT 26,
+            name TEXT NOT NULL,
+            captain_id INTEGER NOT NULL,
+            archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
@@ -178,10 +193,10 @@ def get_task_by_id(task_id: int) -> Optional[dict]:
     }
 
 
-def complete_task(guild_id: int, task_name: str) -> bool:
+def complete_task(guild_id: int, task_name: str, delete) -> bool:
     """
-    Delete the task row (and cascade delete assignees and checkins). Returns True if the
-    task existed and was deleted, False if no matching task was found.
+    Marks a task as complete, moves it to the archived_tasks table, and deletes it from the tasks table.
+    Returns True if the task was successfully moved and deleted, False if no matching task was found.
     """
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -192,8 +207,56 @@ def complete_task(guild_id: int, task_name: str) -> bool:
         conn.close()
         return False
 
-    cur.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-    conn.commit()
+    cur.execute(
+        "SELECT id, guild_id, thread_id, name, captain_id, due_interval_hours FROM tasks WHERE id = ?",
+        (task_id,),
+    )
+    task_row = cur.fetchone()
+
+    if not task_row:
+        conn.close()
+        return False
+
+    task_data = {
+        "id": task_row[0],
+        "guild_id": task_row[1],
+        "thread_id": task_row[2],
+        "name": task_row[3],
+        "captain_id": task_row[4],
+        "due_interval_hours": task_row[5],
+    }
+
+    if not delete:
+        try:
+            cur.execute(
+                """
+                INSERT INTO archived_tasks (original_task_id, guild_id, thread_id, name, captain_id, due_interval_hours)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_data["id"],
+                    task_data["guild_id"],
+                    task_data["thread_id"],
+                    task_data["name"],
+                    task_data["captain_id"],
+                    task_data["due_interval_hours"],
+                ),
+            )
+        except sqlite3.Error as e:
+            print(f"Error archiving task: {e}")
+            conn.rollback()
+            conn.close()
+            return False
+
+    try:
+        cur.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"Error deleting task: {e}")
+        conn.rollback()
+        conn.close()
+        return False
+
     conn.close()
     return True
 
