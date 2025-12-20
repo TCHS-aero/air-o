@@ -51,6 +51,10 @@ class TaskManagement(commands.Cog):
         self.reload_persistent_views()
         self.checkin_loop.start()
 
+    @commands.Cog.listener()
+    async def on_ready(self):
+        print(f"{__name__} is now ready to micromanage!")
+
     def reload_persistent_views(self):
         """
         Reload persistent Check-in views from the database.
