@@ -20,7 +20,7 @@ from db import (
     set_checkin_channel,
 )
 
-CAPTAIN_ROLE_NAME = "Team Captain"
+CAPTAIN_ROLE_NAME = "SE"
 
 
 class TaskManagement(commands.Cog):
@@ -947,13 +947,24 @@ class CheckinSelect(discord.ui.Select):
                 pass
 
         task = get_task_by_id(self.task_id)
-        thread = f"<#{task.get('thread_id')}>"
+        thread_id = task.get("thread_id")
+        thread = f"<#{thread_id}>"
+
         if task:
+            conn = sqlite3.connect(DB_PATH)
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT captain_id FROM tasks WHERE guild_id = ? and id = ?",
+                (interaction.guild.id, self.task_id),
+            )
+            captain = cur.fetchone()[0]
+
             embed = discord.Embed(
                 title=f"New report on Task: {self.name}!",
                 description=f"Check-in from {interaction.user.mention}",
                 color=discord.Color.blue(),
             )
+            embed.add_field(name="Captain:", value=f"<@{captain}>", inline=False)
             embed.add_field(name="Report:", value=choice_text, inline=False)
             embed.add_field(name="Thread:", value=thread, inline=False)
             embed.set_footer(text=ctime())
