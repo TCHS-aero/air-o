@@ -973,17 +973,6 @@ class CheckinSelect(discord.ui.Select):
             embed.set_footer(text=ctime())
             guild_channel_id = get_checkin_channel(interaction.guild_id)
 
-        thread = f"<#{task.get('thread_id')}>"
-        embed = discord.Embed(
-            title=f"New report on Task: {self.name}!",
-            description=f"Check-in from {interaction.user.mention}",
-            color=discord.Color.blue(),
-        )
-        embed.add_field(name="Report:", value=choice_text, inline=False)
-        embed.add_field(name="Thread:", value=thread, inline=False)
-        embed.set_footer(text=ctime())
-        guild_channel_id = get_checkin_channel(interaction.guild_id)
-
         if guild_channel_id:
             try:
                 channel = await interaction.client.fetch_channel(guild_channel_id)
