@@ -51,6 +51,10 @@ class TaskManagement(commands.Cog):
         self.reload_persistent_views()
         self.checkin_loop.start()
 
+    @commands.Cog.listener()
+    async def on_ready(self):
+        print(f"{__name__} is now ready to micromanage!")
+
     def reload_persistent_views(self):
         """
         Reload persistent Check-in views from the database.
@@ -247,7 +251,7 @@ class TaskManagement(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         if not await self.interaction_is_captain(interaction):
             await interaction.followup.send(
-                "Only team captains can can change assignees in tasks, you should totally bug one to do it for you 👀",
+                "Only team captains can change assignees in tasks, you should totally bug one to do it for you 👀",
                 ephemeral=True,
             )
             return
@@ -327,11 +331,12 @@ class TaskManagement(commands.Cog):
             )
 
     @app_commands.command(
-        name="assign_task", description="Create a task thread and assign users."
+        name="assign_task",
+        description="Create a task thread under the current channel and assigns users to said task.",
     )
     @app_commands.describe(
         name="Short name of the task",
-        assignees="Users to assign to this task",
+        assignees="Users to assign to this task. Can be one, or many. Format with spaces. (e.g. @user1 @user2 @user3)",
         reminder_duration="The amount of time, in hours, to send a reminder to the assignees in the thread to check-in.",
     )
     async def assign_task(
@@ -359,7 +364,7 @@ class TaskManagement(commands.Cog):
         await interaction.response.defer(ephemeral=True)
         if not await self.interaction_is_captain(interaction):
             await interaction.followup.send(
-                "Only team captains can assign tasks, go and bug someone do to it for you 🥺",
+                "Only team captains can assign tasks, go and bug someone to do it for you 🥺",
                 ephemeral=True,
             )
             return
@@ -822,7 +827,7 @@ class TaskManagement(commands.Cog):
             print("Skipping check-in loop: Outside waking hours.")
             return
 
-        current_time = datetime.utcnow()
+        current_time = datetime.now()
 
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
@@ -941,10 +946,8 @@ class CheckinSelect(discord.ui.Select):
         except Exception as e:
             print("DB insert error for checkin:", e)
         finally:
-            try:
+            if conn:
                 conn.close()
-            except Exception:
-                pass
 
         task = get_task_by_id(self.task_id)
         thread_id = task.get("thread_id")
@@ -970,14 +973,23 @@ class CheckinSelect(discord.ui.Select):
             embed.set_footer(text=ctime())
             guild_channel_id = get_checkin_channel(interaction.guild_id)
 
+        thread = f"<#{task.get('thread_id')}>"
+        embed = discord.Embed(
+            title=f"New report on Task: {self.name}!",
+            description=f"Check-in from {interaction.user.mention}",
+            color=discord.Color.blue(),
+        )
+        embed.add_field(name="Report:", value=choice_text, inline=False)
+        embed.add_field(name="Thread:", value=thread, inline=False)
+        embed.set_footer(text=ctime())
+        guild_channel_id = get_checkin_channel(interaction.guild_id)
+
+        if guild_channel_id:
             try:
-                if guild_channel_id is not None:
-                    channel = await interaction.client.fetch_channel(guild_channel_id)
-                    await channel.send(embed=embed)
+                channel = await interaction.client.fetch_channel(guild_channel_id)
+                await channel.send(embed=embed)
             except Exception as e:
-                print("Failed to send checkin to configured channel:", e)
-        else:
-            return
+                print("Failed to send checkin to check-in channel:", e)
 
         try:
             await interaction.response.followup(
