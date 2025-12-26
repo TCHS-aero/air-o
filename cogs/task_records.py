@@ -837,7 +837,7 @@ class TaskManagement(commands.Cog):
     )
     @app_commands.describe(
         assignees="Users to assign to this task. Can be one, or many. Format with spaces. (e.g. @user1 @user2 @user3)",
-        time="The time from creation that the assignees will be reminded. Created in basic time format. Can be up to a week and down to the nearest minute. (e.g. 1w2d3h4m)",
+        time="The time from creation that the assignees will be reminded. (e.g. 1w2d3h4m)",
         content="Anything that you want to remind the assignees to do.",
     )
     async def create_reminder(
