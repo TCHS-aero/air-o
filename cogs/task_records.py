@@ -4,6 +4,7 @@ import sqlite3
 from datetime import datetime, time, timedelta
 from time import ctime
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
@@ -14,10 +15,12 @@ from db import (
     complete_task,
     create_task,
     get_checkin_channel,
+    get_reminders,
     get_task_by_id,
     get_task_id_by_name,
     init_db,
     set_checkin_channel,
+    set_reminder,
 )
 
 CAPTAIN_ROLE_NAME = "SE"
@@ -50,6 +53,7 @@ class TaskManagement(commands.Cog):
         init_db()
         self.reload_persistent_views()
         self.checkin_loop.start()
+        self.remind.start()
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -88,15 +92,13 @@ class TaskManagement(commands.Cog):
 
     def within_waking_hours(self):
         """
-        Determine whether the current local time is within waking hours.
+        Determine whether the current Los Angeles local time is within waking hours.
 
         Waking hours are defined as:
         - 09:00 AM to 09:00 PM (inclusive)
-
-        Returns:
-            bool: True if current time is within waking hours, otherwise False.
         """
-        return time(9, 0, 0) <= datetime.now().time() <= time(21, 0, 0)
+        la_time = datetime.now(ZoneInfo("America/Los_Angeles")).time()
+        return time(9, 0, 0) <= la_time <= time(21, 0, 0)
 
     def get_query(self, archived, placeholder: Optional[str]):
         """
@@ -317,7 +319,19 @@ class TaskManagement(commands.Cog):
                         value=", ".join(m.mention for m in assignee_members),
                         inline=False,
                     )
-                    await message.edit(embed=embed)
+                    await message.edit(
+                        content=f"Hey {', '.join(m.mention for m in assignee_members)}, welcome to the thread! You can either use this channel to chat about your tasks, or simply use it to send progress updates!",
+                        embed=embed,
+                    )
+
+                    members = await thread.fetch_members()
+                    for m in members:
+                        if m.id not in ids and m.id != self.bot.user.id:
+                            await thread.remove_user(m)
+
+                    for assignee in assignee_members:
+                        if assignee not in members:
+                            await thread.add_user(assignee)
 
                     await interaction.followup.send(
                         f"Task `{name}` assignees updated successfully in {thread.mention}! Now they can work properly :D",
@@ -448,7 +462,11 @@ class TaskManagement(commands.Cog):
 
         view = CheckinView(task_id=task_id, name=name)
         try:
-            first_msg = await thread.send(embed=embed, view=view)
+            first_msg = await thread.send(
+                embed=embed,
+                view=view,
+                content=f"Hey {', '.join(m.mention for m in assignee_members)}, welcome to the thread! You can either use this channel to chat about your tasks, or simply use it to send progress updates!",
+            )
             await asyncio.sleep(1)
             await first_msg.pin()
         except discord.HTTPException as e:
@@ -813,6 +831,62 @@ class TaskManagement(commands.Cog):
             except Exception:
                 pass
 
+    @app_commands.command(
+        name="create_reminder",
+        description="Set reminders for a set of users to tell them what to do after a given time.",
+    )
+    @app_commands.describe(
+        assignees="Users to assign to this task. Can be one, or many. Format with spaces. (e.g. @user1 @user2 @user3)",
+        time="The time from creation that the assignees will be reminded. Created in basic time format. Can be up to a week and down to the nearest minute. (e.g. 1w2d3h4m)",
+        content="Anything that you want to remind the assignees to do.",
+    )
+    async def create_reminder(
+        self, interaction: discord.Interaction, assignees: str, time: str, content: str
+    ):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            ids = set(int(x) for x in re.findall(r"\d{15,20}", assignees))
+            set_reminder(
+                interaction.guild_id,
+                interaction.channel_id,
+                interaction.user.id,
+                ids,
+                time,
+                content,
+            )
+        except Exception as e:
+            print(f"Failed to create reminder: {e}")
+            interaction.followup.send("Encountered an error while creating task:", e)
+
+        await interaction.followup.send(
+            "Reminder created! I hope that this encourages them a little bit..."
+        )
+
+    @tasks.loop(minutes=1)
+    async def remind(self):
+        for reminder in get_reminders():
+            try:
+                if reminder:
+                    captain_id, channel_id, content, assignees, task_id = reminder
+                    channel = await self.bot.fetch_channel(channel_id)
+
+                    await asyncio.sleep(1)
+
+                    await channel.send(
+                        f'Hey, {", ".join(f"<@{m}>" for m in assignees)}! Don\'t forget, <@{captain_id}> wants you to "{content}"!'
+                    )
+                    conn = sqlite3.connect(DB_PATH)
+                    cur = conn.cursor()
+                    cur.execute("PRAGMA foreign_keys = ON;")
+                    cur.execute(
+                        "DELETE FROM reminders WHERE id = ?",
+                        (task_id,),
+                    )
+                    conn.commit()
+
+            except discord.HTTPException as e:
+                print(f"Failed to send reminder to <#{channel_id}>: {e}")
+
     @tasks.loop(minutes=20)
     async def checkin_loop(self):
         """
@@ -827,7 +901,7 @@ class TaskManagement(commands.Cog):
             print("Skipping check-in loop: Outside waking hours.")
             return
 
-        current_time = datetime.now()
+        current_time = datetime.utcnow()
 
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()

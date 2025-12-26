@@ -1,3 +1,4 @@
+import re
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -43,7 +44,18 @@ def init_db() -> None:
             task_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
             PRIMARY KEY (task_id, user_id),
-            FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+            FOREIGN KEY (task_id) REFERENCES tasks(channel_id) ON DELETE CASCADE
+        )
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reminder_assignees (
+            task_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            PRIMARY KEY (task_id, user_id),
+            FOREIGN KEY (task_id) REFERENCES reminders(id) ON DELETE CASCADE
         )
         """
     )
@@ -85,8 +97,119 @@ def init_db() -> None:
         """
     )
 
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS reminders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            channel_id INTEGER NOT NULL,
+            send_time INTEGER NOT NULL,
+            captain_id INTEGER NOT NULL,
+            content TEXT
+        )
+        """
+    )
+
     conn.commit()
     conn.close()
+
+
+def set_reminder(
+    guild_id: int,
+    thread_id: int,
+    captain_id: int,
+    assignee_ids: Iterable[int],
+    time_str: str,
+    content: str,
+):
+    parts = re.findall(r"(\d+)([wdhms])", time_str)
+    if not parts:
+        raise ValueError(f"Invalid time string format: {time_str}")
+
+    duration_args = {}
+    for value, unit in parts:
+        value = int(value)
+        if unit == "w":
+            duration_args["weeks"] = value
+        elif unit == "d":
+            duration_args["days"] = value
+        elif unit == "h":
+            duration_args["hours"] = value
+        elif unit == "m":
+            duration_args["minutes"] = value
+        elif unit == "s":
+            duration_args["seconds"] = value
+
+    next_check_time = datetime.utcnow() + timedelta(**duration_args)
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("PRAGMA foreign_keys = ON;")
+    try:
+        cur.execute(
+            """
+            INSERT INTO reminders (guild_id, channel_id, send_time, captain_id, content)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (guild_id, thread_id, next_check_time.timestamp(), captain_id, content),
+        )
+        remind_id = cur.lastrowid
+
+        assignees = [(remind_id, uid) for uid in assignee_ids]
+        if assignees:
+            cur.executemany(
+                "INSERT INTO reminder_assignees (task_id, user_id) VALUES (?, ?)",
+                assignees,
+            )
+        conn.commit()
+    except sqlite3.IntegrityError as e:
+        print(f"Error creating reminder: {e}")
+        conn.rollback()
+        remind_id = None
+    finally:
+        conn.close()
+
+    return remind_id
+
+
+def get_reminders():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("PRAGMA foreign_keys = ON;")
+
+    try:
+        cur.execute(
+            """
+            SELECT id, captain_id, channel_id, send_time, content
+            FROM reminders
+            WHERE send_time <= ?
+            """,
+            (datetime.utcnow().timestamp(),),
+        )
+        reminders = cur.fetchall()
+
+        results = []
+        for reminder in reminders:
+            reminder_id, captain_id, channel_id, send_time, content = reminder
+
+            cur.execute(
+                """
+                SELECT user_id
+                FROM reminder_assignees
+                WHERE task_id = ?
+                """,
+                (reminder_id,),
+            )
+            assignees = [row[0] for row in cur.fetchall()]
+            results.append((captain_id, channel_id, content, assignees, reminder_id))
+
+        return results
+
+    except sqlite3.Error as e:
+        print(f"Error retrieving reminders: {e}")
+        return []
+    finally:
+        conn.close()
 
 
 def create_task(
