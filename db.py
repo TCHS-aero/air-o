@@ -44,7 +44,7 @@ def init_db() -> None:
             task_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
             PRIMARY KEY (task_id, user_id),
-            FOREIGN KEY (task_id) REFERENCES tasks(channel_id) ON DELETE CASCADE
+            FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
         )
         """
     )
