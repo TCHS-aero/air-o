@@ -29,7 +29,7 @@ Air-O is a customizable and efficient Discord bot aimed at managing server utili
 ## Features
 
 - **Task Management** \
-        This bot comes with a surplus of task management features, assisting in keeping everyone on track.
+        Air-O comes with a surplus of task management features, assisting in keeping every task organized and easy to access.
 - **Reminders** \
        If your friends or your students are having trouble remembering to do something, creating reminders will help keep them on track.
 
