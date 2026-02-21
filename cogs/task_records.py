@@ -887,12 +887,12 @@ class TaskManagement(commands.Cog):
             except discord.HTTPException as e:
                 print(f"Failed to send reminder to <#{channel_id}>: {e}")
 
-    @tasks.loop(minutes=20)
+    @tasks.loop(minutes=5)
     async def checkin_loop(self):
         """
         Periodic background task that sends check-in reminders.
 
-        - Runs every 20 minutes
+        - Runs every 5 minutes
         - Skips execution outside waking hours
         - Sends reminder messages to overdue task threads
         - Updates the next scheduled reminder time
@@ -906,17 +906,33 @@ class TaskManagement(commands.Cog):
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT thread_id, next_check_time, due_interval_hours FROM tasks WHERE next_check_time <= ?",
+            "SELECT thread_id, next_check_time, due_interval_hours, id FROM tasks WHERE next_check_time <= ?",
             (current_time,),
         )
         due_threads = cursor.fetchall()
 
-        for thread_id, next_check, due_interval_hours in due_threads:
+        for thread_id, next_check, due_interval_hours, ids in due_threads:
             try:
                 thread = await self.bot.fetch_channel(thread_id)
+                assignees_list = []
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    cur = conn.cursor()
+                    cur.execute(
+                        "SELECT user_id FROM task_assignees WHERE task_id = ?", (ids,)
+                    )
+                    ass_rows = cur.fetchall()
+                    assignees_list = [f"<@{r[0]}>" for r in ass_rows] if ass_rows else []
+                except Exception:
+                    assignees_list = []
+                finally:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
 
                 await thread.send(
-                    "Don't forget to send in today's check-in if you haven't already!"
+                    f"{", ".join(assignees_list)}! Don't forget to send in today's check-in if you haven't already!"
                 )
                 await asyncio.sleep(1)
 
