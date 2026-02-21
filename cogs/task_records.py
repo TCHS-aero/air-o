@@ -98,6 +98,20 @@ class TaskManagement(commands.Cog):
             return False
         return any(r.name == CAPTAIN_ROLE_NAME for r in interaction.user.roles)
 
+    def get_assignees_from_string(self, guild, assignees):
+        ids = set(int(x) for x in re.findall(r"\d{15,20}", assignees))
+        assignee_members = []
+
+        for member_id in ids:
+            member = guild.get_member(member_id)
+            if not member:
+                try:
+                    member = await guild.fetch_member(member_id)
+                except discord.HTTPException:
+                    continue
+            assignee_members.append(member)
+        return ids, assignee_members
+
     @app_commands.command(
         name="set_checkin_channel",
         description="Setup a channel for checkins to be forwarded to.",
@@ -185,17 +199,7 @@ class TaskManagement(commands.Cog):
             )
             return
 
-        ids = set(int(x) for x in re.findall(r"\d{15,20}", assignees))
-        assignee_members = []
-
-        for member_id in ids:
-            member = guild.get_member(member_id)
-            if not member:
-                try:
-                    member = await guild.fetch_member(member_id)
-                except discord.HTTPException:
-                    continue
-            assignee_members.append(member)
+        ids, assignee_members = self.get_assignees_from_string(guild, assignees)
 
         conn = sqlite3.connect(DB_PATH)
         try:
@@ -293,6 +297,14 @@ class TaskManagement(commands.Cog):
             )
             return
 
+        guild = interaction.guild
+        if guild is None:
+            await interaction.followup.send(
+                "This command must be used in a server (guild), not in DMs.",
+                ephemeral=True,
+            )
+            return
+
         try:
             checkin_channel_id = get_checkin_channel(interaction.guild_id)
         except Exception:
@@ -305,19 +317,7 @@ class TaskManagement(commands.Cog):
             )
             return
 
-        ids = set(int(x) for x in re.findall(r"\d{15,20}", assignees))
-        guild = interaction.guild
-        assignee_members = []
-
-        if guild:
-            for member_id in ids:
-                member = guild.get_member(member_id)
-                if not member:
-                    try:
-                        member = await guild.fetch_member(member_id)
-                    except discord.HTTPException:
-                        continue
-                assignee_members.append(member)
+        ids, assignee_members = self.get_assignees_from_string(guild, assignees)
 
         if interaction.channel is None or not isinstance(
             interaction.channel, discord.TextChannel
@@ -417,7 +417,6 @@ class TaskManagement(commands.Cog):
             )
             return
 
-        # (left as original behavior; not part of the "fix-only" patch)
         task_list = task_names.split("; ")
         failed_tasks = []
         completed_tasks = []
@@ -488,7 +487,7 @@ class TaskManagement(commands.Cog):
     async def list_tasks(
         self,
         interaction: discord.Interaction,
-        filter: Optional[str],
+        filter: Optional[str] = None,
         archived: Optional[bool] = False,
     ):
         await interaction.response.defer(ephemeral=True)
