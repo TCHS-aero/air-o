@@ -106,7 +106,7 @@ class TaskManagement(commands.Cog):
             member = guild.get_member(member_id)
             if not member:
                 try:
-                    member = await guild.fetch_member(member_id)
+                    member = guild.fetch_member(member_id)
                 except discord.HTTPException:
                     continue
             assignee_members.append(member)
