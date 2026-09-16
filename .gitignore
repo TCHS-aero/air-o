@@ -1,5 +1,7 @@
 # Pre-configured virtual environments
-air-o
+air-o/
+.venv/
+venv/
 
 # Sensitive files
 *.env
