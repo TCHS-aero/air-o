@@ -1,7 +1,7 @@
 import datetime
 
 import discord
-from discord import Optional, app_commands
+from discord import app_commands
 from discord.ext import commands
 
 
@@ -16,8 +16,14 @@ class Moderation(commands.Cog):
     @app_commands.command(name="kick", description="Kicks a specified member.")
     @app_commands.checks.has_permissions(kick_members=True)
     async def kick(
-        self, interaction: discord.Interaction, member: discord.Member, reason: str
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member,
+        reason: str,
+        forward: bool | None,
     ):
+        if forward:
+            await member.send(reason)
         await interaction.guild.kick(member)
         await interaction.response.send_message(
             f'{member.mention} has walked the plank! The reason why is apparently "{reason}". Ouch. Courtesy of {interaction.user.mention}!',
@@ -91,7 +97,7 @@ class Moderation(commands.Cog):
         interaction: discord.Interaction,
         member: discord.Member,
         *,
-        reason: Optional[str],
+        reason: str | None,
     ):
         await interaction.response.defer()
         if member.timed_out_until:
