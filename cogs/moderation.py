@@ -15,6 +15,7 @@ class Moderation(commands.Cog):
 
     @app_commands.command(name="kick", description="Kicks a specified member.")
     @app_commands.checks.has_permissions(kick_members=True)
+    @app_commands.default_permissions(kick_members=True)
     async def kick(
         self,
         interaction: discord.Interaction,
@@ -23,7 +24,9 @@ class Moderation(commands.Cog):
         forward: bool | None,
     ):
         if forward:
-            await member.send(reason)
+            await member.send(
+                f"{reason}\n-# This message was forwarded from {interaction.guild.name}"
+            )
         await interaction.guild.kick(member)
         await interaction.response.send_message(
             f'{member.mention} has walked the plank! The reason why is apparently "{reason}". Ouch. Courtesy of {interaction.user.mention}!',
@@ -34,6 +37,7 @@ class Moderation(commands.Cog):
         name="ban", description="Bans a specified member from the server."
     )
     @app_commands.checks.has_permissions(ban_members=True)
+    @app_commands.default_permissions(ban_members=True)
     async def ban(
         self, interaction: discord.Interaction, member: discord.Member, reason: str
     ):
@@ -47,6 +51,7 @@ class Moderation(commands.Cog):
         name="unban", description="Unbans a specified member by their user ID."
     )
     @app_commands.checks.has_permissions(ban_members=True)
+    @app_commands.default_permissions(ban_members=True)
     async def unban(self, interaction: discord.Interaction, member_identifier: str):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -74,6 +79,7 @@ class Moderation(commands.Cog):
 
     @app_commands.command(name="mute", description="Timeout a user for a set duration.")
     @app_commands.checks.has_permissions(moderate_members=True)
+    @app_commands.default_permissions(moderate_members=True)
     async def mute(
         self,
         interaction: discord.Interaction,
@@ -92,6 +98,7 @@ class Moderation(commands.Cog):
 
     @app_commands.command(name="unmute", description="Removes timeout from a user.")
     @app_commands.checks.has_permissions(moderate_members=True)
+    @app_commands.default_permissions(moderate_members=True)
     async def unmute(
         self,
         interaction: discord.Interaction,

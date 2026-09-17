@@ -3,7 +3,6 @@ import re
 import sqlite3
 from datetime import datetime, time, timedelta
 from time import ctime
-from typing import Optional
 from zoneinfo import ZoneInfo
 
 import discord
@@ -22,8 +21,6 @@ from db import (
     set_checkin_channel,
     set_reminder,
 )
-
-CAPTAIN_ROLE_NAME = "SE"
 
 
 class TaskManagement(commands.Cog):
@@ -62,7 +59,7 @@ class TaskManagement(commands.Cog):
         la_time = datetime.now(ZoneInfo("America/Los_Angeles")).time()
         return time(9, 0, 0) <= la_time <= time(21, 0, 0)
 
-    def get_query(self, archived, placeholder: Optional[str]):
+    def get_query(self, archived, placeholder: str | None):
         if archived and placeholder:
             return f"""
                     SELECT id, name, thread_id, captain_id, due_interval_hours
@@ -93,11 +90,6 @@ class TaskManagement(commands.Cog):
                     ORDER BY id
                     """
 
-    async def interaction_is_captain(self, interaction: discord.Interaction) -> bool:
-        if not interaction.user or not isinstance(interaction.user, discord.Member):
-            return False
-        return any(r.name == CAPTAIN_ROLE_NAME for r in interaction.user.roles)
-
     def get_assignees_from_string(self, guild, assignees):
         ids = set(int(x) for x in re.findall(r"\d{15,20}", assignees))
         assignee_members = []
@@ -119,16 +111,12 @@ class TaskManagement(commands.Cog):
     @app_commands.describe(
         channel_id="Either the numerical value, or #<channel name>",
     )
+    @app_commands.checks.has_permissions(manage_channels=True, manage_messages=True)
+    @app_commands.default_permissions(manage_channels=True, manage_messages=True)
     async def set_checkin_channel(
         self, interaction: discord.Interaction, channel_id: str
     ):
         await interaction.response.defer(ephemeral=True)
-        if not await self.interaction_is_captain(interaction):
-            await interaction.followup.send(
-                "Only team captains can set a checkin channel tasks, sorry! Bug a captain to do their thing.",
-                ephemeral=True,
-            )
-            return
 
         try:
             no_whitespace: str = channel_id.strip()
@@ -177,6 +165,8 @@ class TaskManagement(commands.Cog):
         name="Name of the task",
         assignees="Users to assign to this task",
     )
+    @app_commands.checks.has_permissions(manage_channels=True, manage_messages=True)
+    @app_commands.default_permissions(manage_channels=True, manage_messages=True)
     async def update_assignees(
         self,
         interaction: discord.Interaction,
@@ -184,12 +174,6 @@ class TaskManagement(commands.Cog):
         assignees: str,
     ):
         await interaction.response.defer(ephemeral=True)
-        if not await self.interaction_is_captain(interaction):
-            await interaction.followup.send(
-                "Only team captains can change assignees in tasks, you should totally bug one to do it for you 👀",
-                ephemeral=True,
-            )
-            return
 
         guild = interaction.guild
         if guild is None:
@@ -282,20 +266,16 @@ class TaskManagement(commands.Cog):
         assignees="Users to assign to this task. Can be one, or many. Format with spaces. (e.g. @user1 @user2 @user3)",
         reminder_duration="The amount of time, in hours, to send a reminder to the assignees in the thread to check-in.",
     )
+    @app_commands.checks.has_permissions(manage_channels=True, manage_messages=True)
+    @app_commands.default_permissions(manage_channels=True, manage_messages=True)
     async def assign_task(
         self,
         interaction: discord.Interaction,
         name: str,
         assignees: str,
-        reminder_duration: Optional[int] = 26,
+        reminder_duration: int | None = 26,
     ):
         await interaction.response.defer(ephemeral=True)
-        if not await self.interaction_is_captain(interaction):
-            await interaction.followup.send(
-                "Only team captains can assign tasks, go and bug someone to do it for you 🥺",
-                ephemeral=True,
-            )
-            return
 
         guild = interaction.guild
         if guild is None:
@@ -396,19 +376,15 @@ class TaskManagement(commands.Cog):
         task_names="Semicolon-separated list of task names to complete and clean up. (e.g. task1; task2; task3; task4) or (e.g. task)",
         delete_thread="Whether to delete the task threads. (disabled by default)",
     )
+    @app_commands.checks.has_permissions(manage_channels=True, manage_messages=True)
+    @app_commands.default_permissions(manage_channels=True, manage_messages=True)
     async def cleanup_task(
         self,
         interaction: discord.Interaction,
         task_names: str,
-        delete_thread: Optional[bool] = False,
+        delete_thread: bool | None = False,
     ):
         await interaction.response.defer(ephemeral=True)
-        if not await self.interaction_is_captain(interaction):
-            await interaction.followup.send(
-                "Only team captains can cleanup tasks. Go ping the captains!",
-                ephemeral=True,
-            )
-            return
 
         if interaction.guild_id is None:
             await interaction.followup.send(
@@ -444,7 +420,7 @@ class TaskManagement(commands.Cog):
                 continue
 
             if not delete_thread and thread_id:
-                thread_channel: Optional[discord.Thread] = None
+                thread_channel: discord.Thread | None = None
                 thread_channel = self.bot.get_channel(thread_id)
                 if thread_channel is None:
                     try:
@@ -487,8 +463,8 @@ class TaskManagement(commands.Cog):
     async def list_tasks(
         self,
         interaction: discord.Interaction,
-        filter: Optional[str] = None,
-        archived: Optional[bool] = False,
+        filter: str | None = None,
+        archived: bool | None = False,
     ):
         await interaction.response.defer(ephemeral=True)
         guild_id = interaction.guild_id
@@ -621,19 +597,15 @@ class TaskManagement(commands.Cog):
         task_names="Semi-colon seperated list of archived task names to delete (e.g., task1; task2).",
         delete_all="Delete all archived tasks.",
     )
+    @app_commands.checks.has_permissions(manage_channels=True, manage_messages=True)
+    @app_commands.default_permissions(manage_channels=True, manage_messages=True)
     async def delete_archived_tasks(
         self,
         interaction: discord.Interaction,
-        task_names: Optional[str] = None,
-        delete_all: Optional[bool] = False,
+        task_names: str | None = None,
+        delete_all: bool | None = False,
     ):
         await interaction.response.defer(ephemeral=True)
-        if not await self.interaction_is_captain(interaction):
-            await interaction.followup.send(
-                "Only team captains can delete tasks! Don't go ruining people's productvity now, or else I'll report you! ...or I would if I could",
-                ephemeral=True,
-            )
-            return
 
         conn = sqlite3.connect(DB_PATH)
 
@@ -964,7 +936,7 @@ class CheckinSelect(discord.ui.Select):
 
 
 class CheckinChoiceView(discord.ui.View):
-    def __init__(self, name, task_id: int, timeout: Optional[float] = 60.0):
+    def __init__(self, name, task_id: int, timeout: float | None = 60.0):
         super().__init__(timeout=timeout)
         self.name = name
         self.add_item(CheckinSelect(task_id=task_id, name=self.name))
